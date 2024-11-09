@@ -33,7 +33,7 @@ size_t lockfree_hashtable_calc_mem_size(const lockfree_hashtable_config_t* confi
     const size_t table_size = config->table_size * sizeof(atomic_uint64_t);
     const size_t keys       = roundup(config->table_size * config->key_size, sizeof(uint64_t));
     const size_t values     = roundup(config->table_size * config->val_size, sizeof(uint64_t));
-    const size_t pool_size  = roundup(config->table_size / 64u, 64u);
+    const size_t pool_size  = config->table_size / 64u + (config->table_size % 64u ? 1 : 0);
     const size_t pool       = pool_size * sizeof(atomic_uint64_t);
     return table_size + keys + values + pool;
 }
@@ -45,6 +45,7 @@ void lockfree_hashtable_init(lockfree_hashtable_t* table, const lockfree_hashtab
     const size_t table_size = config->table_size * sizeof(atomic_uint64_t);
     const size_t key_size   = roundup(config->table_size * config->key_size, sizeof(uint64_t));
     const size_t val_size   = roundup(config->table_size * config->val_size, sizeof(uint64_t));
+    const size_t pool_size  = config->table_size / 64u + (config->table_size % 64u ? 1 : 0);
 
     uint8_t *ptr = memory;
     size_t offset = 0;
@@ -61,12 +62,13 @@ void lockfree_hashtable_init(lockfree_hashtable_t* table, const lockfree_hashtab
     table->pool = ptr + offset;
 
     memset(table->entries, 0, table_size);
+    memset(table->pool, 0, pool_size * sizeof(atomic_uint64_t));
 }
 
 static uint32_t allocate_item(lockfree_hashtable_t* table)
 {
     const lockfree_hashtable_config_t* config = table->config;
-    const size_t pool_size  = roundup(config->table_size / 64u, 64u);
+    const size_t pool_size  = config->table_size / 64u + (config->table_size % 64u ? 1 : 0);
     atomic_uint64_t* pool = table->pool;
 
     for (size_t i = 0; i < pool_size; ++i) {
@@ -153,9 +155,13 @@ bool lockfree_hashtable_insert(lockfree_hashtable_t* table, const void* key, con
                     }
                     return true;
                 }
-                continue;
+            } else {
+                new_entry = atomic_load(&entries[index]);
+                if (new_entry == old_entry) {
+                    break;
+                }
+                old_entry = new_entry;
             }
-            break;
         } while(true);
     }
     return false;
@@ -180,10 +186,12 @@ bool lockfree_hashtable_find(lockfree_hashtable_t* table, const void* key, void*
             }
             // if entry is deleted
             if (item == UINT32_MAX) {
-                return false;
+                break;
             }
             if (memcmp(key, get_item_key(table, item), config->key_size) == 0) {
-                memcpy(val, get_item_val(table, item), config->val_size);
+                if (val != NULL) {
+                    memcpy(val, get_item_val(table, item), config->val_size);
+                }
                 const uint64_t new_entry = atomic_load(&entries[index]);
                 if (new_entry == entry) {
                     return true;
@@ -199,4 +207,47 @@ bool lockfree_hashtable_find(lockfree_hashtable_t* table, const void* key, void*
         } while(true);
     }
     return false;
+}
+
+void lockfree_hashtable_erase(lockfree_hashtable_t* table, const void* key)
+{
+    const lockfree_hashtable_config_t* config = table->config;
+    atomic_uint64_t* entries = table->entries;
+    atomic_uint64_t* pool = table->pool;
+
+    const uint32_t hash = calc_hash(key, config->key_size);
+
+    for (size_t i = 0, index = hash % config->table_size; i < config->table_size; ++i, index = (index + 1) % config->table_size) {
+        uint64_t old_entry = atomic_load(&entries[index]);
+        do {
+            const uint32_t old_item = old_entry;
+            const uint32_t old_version = old_entry >> 32u;
+
+            uint32_t new_item = UINT32_MAX;
+            uint32_t new_version = old_version + 1;
+            uint64_t new_entry = ((uint64_t)new_version << 32u) | (uint64_t)new_item;
+
+            // version == 0 means free entry
+            if (old_version == 0) {
+                return;
+            }
+            // if entry is deleted
+            if (old_item == UINT32_MAX) {
+                break;
+            }
+
+            if (memcmp(key, get_item_key(table, old_item), config->key_size) == 0) {
+                if (atomic_compare_exchange_weak(&entries[index], &old_entry, new_entry)) {
+                    delete_item(table, old_item);
+                    return;
+                }
+            } else {
+                new_entry = atomic_load(&entries[index]);
+                if (new_entry == old_entry) {
+                    break;
+                }
+                old_entry = new_entry;
+            }
+        } while(true);
+    }
 }
