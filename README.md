@@ -12,7 +12,7 @@ but not less than 1'000'000 nodes, in each thread endlessly add a random node wi
 No requirement for rehashing. Flat addressing means that the memory is preallocated at table creation time.
 Check consistency means that all elements are added and calculating number if insertions and find per second.
 
-# About struct of project
+# About structure of project
 The project is divided into two main parts:
 - Table Implementation is located in "src" folder.
 - Tests and benchmarks are located in "test" folder.
