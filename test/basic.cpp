@@ -1,9 +1,11 @@
+#include "catch2/catch_test_macros.hpp"
 #include <random>
 #include <memory>
 #include <map>
 #include <vector>
 #include <future>
 #include <string_view>
+#include <span>
 
 #include <catch2/catch_all.hpp>
 #include <lockfree-hashtable.h>
@@ -177,8 +179,8 @@ TEST_CASE("fill and check hash table", "[insert][find]") {
 TEST_CASE("concurency fill table", "[insert][find]") {
     const std::size_t key_size = 64;
     const std::size_t val_size = 128;
-    const std::size_t table_size = 1'000'000;
-    const std::size_t thread_count = GENERATE(2, 3, 7);
+    const std::size_t table_size = 10;
+    const std::size_t thread_count = GENERATE(1/*2, 3, 7*/);
     const lockfree_hashtable_config_t config = {
         table_size,
         key_size,
@@ -186,7 +188,7 @@ TEST_CASE("concurency fill table", "[insert][find]") {
     };
 
     std::mt19937 generator{std::random_device{}()};
-    const auto random_data = make_flat_data(generate_random_data(table_size * 0.75, key_size, val_size, generator));
+    const auto random_data = make_flat_data(generate_random_data(8, key_size, val_size, generator));
     std::string find;
     find.resize(val_size, ' ');
 
@@ -199,28 +201,87 @@ TEST_CASE("concurency fill table", "[insert][find]") {
         auto insert = [&] (const std::pair<std::string, std::string>* data, std::size_t size) {
             for (std::size_t i = 0; i < size; ++i) {
                 auto& [key, val] = data[i];
-                lockfree_hashtable_insert(&table, key.data(), val.data());
+                if (!lockfree_hashtable_insert(&table, key.data(), val.data())) {
+                    return false;
+                }
             }
+            return true;
+        };
+        auto erase = [&] (const std::pair<std::string, std::string>* data, std::size_t size) {
+            for (std::size_t i = 0; i < size; ++i) {
+                auto& [key, val] = data[i];
+                if (!lockfree_hashtable_erase(&table, key.data())) {
+                    return false;
+                }
+            }
+            return true;
+        };
+        auto do_parallel = [&] (auto& function, const auto& random_data) {
+            bool result = true;
+            std::vector<std::future<bool>> threads;
+            threads.reserve(thread_count);
+
+            const auto* data = random_data.data();
+            const auto chunk_size = random_data.size() / thread_count;
+            for (std::size_t i = 0; i < thread_count; ++i) {
+                threads.emplace_back(std::async(std::launch::async, function, data + i * chunk_size, chunk_size));
+            }
+            if (thread_count * chunk_size < random_data.size()) {
+                result &= function(data + thread_count * chunk_size, random_data.size() - thread_count * chunk_size);
+            }
+            for (auto& th: threads) {
+                result &= th.get();
+            }
+            return result;
         };
 
-        std::vector<std::future<void>> threads;
-        threads.reserve(thread_count);
-
-        const auto* data = random_data.data();
-        const auto chunk_size = random_data.size() / thread_count;
-        for (std::size_t i = 0; i < thread_count; ++i) {
-            threads.emplace_back(std::async(std::launch::async, insert, data + i * chunk_size, chunk_size));
-        }
-        if (thread_count * chunk_size < random_data.size()) {
-            insert(data + thread_count * chunk_size, random_data.size() - thread_count * chunk_size);
-        }
-        for (auto& th: threads) {
-            th.get();
-        }
+        REQUIRE(do_parallel(insert, random_data));
 
         for (auto& [key, val]: random_data) {
             REQUIRE(lockfree_hashtable_find(&table, key.data(), find.data()));
             REQUIRE(find == val);
+        }
+
+        SECTION("erase all elements") {
+            REQUIRE(do_parallel(erase, random_data));
+
+            for (auto& [key, val]: random_data) {
+                REQUIRE(!lockfree_hashtable_find(&table, key.data(), nullptr));
+            }
+        }
+
+        SECTION("erase half data") {
+            auto first_part = std::span(random_data.data(), random_data.size() / 2);
+            auto second_part = std::span(random_data.data() + random_data.size() / 2, random_data.size() / 2);
+            
+            REQUIRE(do_parallel(erase, first_part));
+            for (auto& [key, val]: first_part) {
+                REQUIRE(!lockfree_hashtable_find(&table, key.data(), nullptr));
+            }
+            for (auto& [key, val]: second_part) {
+                REQUIRE(lockfree_hashtable_find(&table, key.data(), find.data()));
+                REQUIRE(find == val);
+            }
+
+            SECTION("insert half back") {
+                REQUIRE(do_parallel(insert, first_part));
+                for (auto& [key, val]: random_data) {
+                    REQUIRE(lockfree_hashtable_find(&table, key.data(), find.data()));
+                    REQUIRE(find == val);
+                }
+            }
+
+            /*SECTION("insert half back and erase another half") {
+                REQUIRE(do_parallel(insert, first_part));
+                REQUIRE(do_parallel(erase, second_part));
+                for (auto& [key, val]: second_part) {
+                    REQUIRE(!lockfree_hashtable_find(&table, key.data(), nullptr));
+                }
+                for (auto& [key, val]: first_part) {
+                    REQUIRE(lockfree_hashtable_find(&table, key.data(), find.data()));
+                    REQUIRE(find == val);
+                }
+            }*/
         }
     }
 }

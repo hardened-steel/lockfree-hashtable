@@ -33,3 +33,5 @@
 
 #build dirs
 build/
+.cache/
+.vscode/

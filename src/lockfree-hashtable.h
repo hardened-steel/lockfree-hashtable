@@ -1,5 +1,6 @@
 #pragma once
 #include <stdbool.h>
+#include <stdlib.h>
 #include <stdint.h>
 
 typedef struct {
@@ -25,7 +26,7 @@ size_t lockfree_hashtable_calc_mem_size(const lockfree_hashtable_config_t* confi
 void lockfree_hashtable_init(lockfree_hashtable_t* table, const lockfree_hashtable_config_t* config, void* memory);
 bool lockfree_hashtable_insert(lockfree_hashtable_t* table, const void* key, const void* val);
 bool lockfree_hashtable_find(lockfree_hashtable_t* table, const void* key, void* val);
-void lockfree_hashtable_erase(lockfree_hashtable_t* table, const void* key);
+bool lockfree_hashtable_erase(lockfree_hashtable_t* table, const void* key);
 
 #ifdef __cplusplus
 }

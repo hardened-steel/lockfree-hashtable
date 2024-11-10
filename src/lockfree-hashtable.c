@@ -209,7 +209,7 @@ bool lockfree_hashtable_find(lockfree_hashtable_t* table, const void* key, void*
     return false;
 }
 
-void lockfree_hashtable_erase(lockfree_hashtable_t* table, const void* key)
+bool lockfree_hashtable_erase(lockfree_hashtable_t* table, const void* key)
 {
     const lockfree_hashtable_config_t* config = table->config;
     atomic_uint64_t* entries = table->entries;
@@ -229,7 +229,7 @@ void lockfree_hashtable_erase(lockfree_hashtable_t* table, const void* key)
 
             // version == 0 means free entry
             if (old_version == 0) {
-                return;
+                return false;
             }
             // if entry is deleted
             if (old_item == UINT32_MAX) {
@@ -239,7 +239,7 @@ void lockfree_hashtable_erase(lockfree_hashtable_t* table, const void* key)
             if (memcmp(key, get_item_key(table, old_item), config->key_size) == 0) {
                 if (atomic_compare_exchange_weak(&entries[index], &old_entry, new_entry)) {
                     delete_item(table, old_item);
-                    return;
+                    return true;
                 }
             } else {
                 new_entry = atomic_load(&entries[index]);
@@ -250,4 +250,5 @@ void lockfree_hashtable_erase(lockfree_hashtable_t* table, const void* key)
             }
         } while(true);
     }
+    return false;
 }
