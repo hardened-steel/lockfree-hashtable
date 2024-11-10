@@ -6,6 +6,8 @@
 typedef _Atomic(uint32_t) atomic_uint32_t;
 typedef _Atomic(uint64_t) atomic_uint64_t;
 
+#define NULL_ITEM UINT32_MAX
+
 static size_t roundup(size_t x, size_t y) {
     return ((x + y - 1) / y) * y;
 }
@@ -83,17 +85,17 @@ static uint32_t allocate_item(lockfree_hashtable_t* table)
                         }
                     }
                 } else {
-                    return UINT32_MAX;
+                    return NULL_ITEM;
                 }
             }
         }
     }
-    return UINT32_MAX;
+    return NULL_ITEM;
 }
 
 static void delete_item(lockfree_hashtable_t* table, uint32_t item)
 {
-    if (item == UINT32_MAX) {
+    if (item == NULL_ITEM) {
         return;
     }
     atomic_uint64_t* pool = table->pool;
@@ -122,7 +124,7 @@ bool lockfree_hashtable_insert(lockfree_hashtable_t* table, const void* key, con
     atomic_uint64_t* pool = table->pool;
 
     const uint32_t item = allocate_item(table);
-    if (item == UINT32_MAX) {
+    if (item == NULL_ITEM) {
         return false;
     }
 
@@ -143,7 +145,7 @@ bool lockfree_hashtable_insert(lockfree_hashtable_t* table, const void* key, con
 
             const bool can_insert = (old_version == 0) // version == 0 means free entry
                 // if entry is deleted
-                || (old_item == UINT32_MAX)
+                || (old_item == NULL_ITEM)
                 // if keys are equal
                 || (memcmp(key, get_item_key(table, old_item), config->key_size) == 0)
             ;
@@ -185,7 +187,7 @@ bool lockfree_hashtable_find(lockfree_hashtable_t* table, const void* key, void*
                 return false;
             }
             // if entry is deleted
-            if (item == UINT32_MAX) {
+            if (item == NULL_ITEM) {
                 break;
             }
             if (memcmp(key, get_item_key(table, item), config->key_size) == 0) {
@@ -223,7 +225,7 @@ bool lockfree_hashtable_erase(lockfree_hashtable_t* table, const void* key)
             const uint32_t old_item = old_entry;
             const uint32_t old_version = old_entry >> 32u;
 
-            uint32_t new_item = UINT32_MAX;
+            uint32_t new_item = NULL_ITEM;
             uint32_t new_version = old_version + 1;
             uint64_t new_entry = ((uint64_t)new_version << 32u) | (uint64_t)new_item;
 
@@ -232,7 +234,7 @@ bool lockfree_hashtable_erase(lockfree_hashtable_t* table, const void* key)
                 return false;
             }
             // if entry is deleted
-            if (old_item == UINT32_MAX) {
+            if (old_item == NULL_ITEM) {
                 break;
             }
 
