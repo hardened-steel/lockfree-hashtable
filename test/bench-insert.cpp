@@ -12,11 +12,10 @@ int main()
 {
     const std::size_t key_size = 64;
     const std::size_t val_size = 128;
-    const std::size_t table_size = 1'250'000;
-    const std::size_t item_count = 1'000'000;
+    const std::size_t table_size = 150'000'000;
+    const std::size_t item_count = 100'000'000;
     const std::size_t thread_count = 16;
     const std::size_t chunk_size = 8192;
-    const std::size_t count_interval = 1'000'000;
     const lockfree_hashtable_config_t config = {
         table_size,
         key_size,
@@ -73,6 +72,10 @@ int main()
             double elapsed_seconds = std::chrono::duration_cast<std::chrono::duration<double>>(finish - start).count();
             time += elapsed_seconds;
         }
+        {
+            std::lock_guard lk(m);
+            std::cout << std::setprecision (15) << "insert speed: " << count / time << " items per second" << std::endl;
+        }
         return count / time;
     };
     auto check = [&] (std::random_device::result_type seed, std::size_t prefix, std::size_t size) {
@@ -120,6 +123,10 @@ int main()
             double elapsed_seconds = std::chrono::duration_cast<std::chrono::duration<double>>(finish - start).count();
             time += elapsed_seconds;
         }
+        {
+            std::lock_guard lk(m);
+            std::cout << std::setprecision (15) << "check speed: " << count / time << " items per second" << std::endl;
+        }
         return count / time;
     };
     auto do_parallel = [&] (std::random_device::result_type seed, auto& function, std::size_t size) {
@@ -158,60 +165,6 @@ int main()
         auto finish = std::chrono::steady_clock::now();
         double elapsed_seconds = std::chrono::duration_cast<std::chrono::duration<double>>(finish - start).count();
         std::cout << std::setprecision (15) << "check (" << result << ") estimated: " << elapsed_seconds << " seconds" << std::endl;
-    }
-    {
-        auto insert_and_check = [&] (std::random_device::result_type seed, std::size_t prefix) {
-            std::size_t count  = 0;
-            double insert_time = 0;
-            double find_time   = 0;
-            std::unique_ptr<std::uint8_t[]> data(new std::uint8_t[key_size + val_size]);
-            std::unique_ptr<std::uint8_t[]> value(new std::uint8_t[val_size]);
-            std::mt19937 generator{seed};
-            generate_random_key_val_data(data.get(), prefix, 1, key_size, val_size, generator);
-            for (;; count = 0) {
-                for (; count < count_interval; ++count) {
-                    auto* key = &data[0];
-                    auto* val = &data[key_size];
-                    {
-                        auto start = std::chrono::steady_clock::now();
-                        if (!lockfree_hashtable_insert(&table, key, val)) {
-                            std::lock_guard lk(m);
-                            std::cout << "error insert element" << std::endl;
-                            throw std::runtime_error("error insert element");
-                        }
-                        auto finish = std::chrono::steady_clock::now();
-                        insert_time += std::chrono::duration_cast<std::chrono::duration<double>>(finish - start).count();
-                    }
-                    {
-                        auto start = std::chrono::steady_clock::now();
-                        if (!lockfree_hashtable_find(&table, key, value.get())) {
-                            std::lock_guard lk(m);
-                            std::cout << "error find element" << std::endl;
-                            throw std::runtime_error("error find element");
-                        }
-                        auto finish = std::chrono::steady_clock::now();
-                        find_time += std::chrono::duration_cast<std::chrono::duration<double>>(finish - start).count();
-                        if (std::memcmp(val, value.get(), val_size) != 0) {
-                            std::lock_guard lk(m);
-                            std::cout << "error compare element" << std::endl;
-                            throw std::runtime_error("error compare element");
-                        }
-                    }
-                }
-                std::lock_guard lk(m);
-                std::cout << std::setprecision (15) << "insert speed: " << count / insert_time << " items per second" << std::endl;
-                std::cout << std::setprecision (15) << "find speed: " << count / find_time << " items per second" << std::endl;
-            }
-        };
-        std::vector<std::future<void>> threads;
-        threads.reserve(thread_count);
-
-        for (std::size_t i = 0; i < thread_count; ++i) {
-            threads.emplace_back(std::async(std::launch::async, insert_and_check, random(), i + item_count));
-        }
-        for (auto& th: threads) {
-            th.get();
-        }
     }
 
     return 0;
