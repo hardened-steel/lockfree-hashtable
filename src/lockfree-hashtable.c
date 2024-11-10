@@ -73,6 +73,7 @@ static uint32_t allocate_item(lockfree_hashtable_t* table)
     const size_t pool_size  = config->table_size / 64u + (config->table_size % 64u ? 1 : 0);
     atomic_uint64_t* pool = table->pool;
 
+    // scan and search a free bit in the pool
     for (size_t i = 0; i < pool_size; ++i) {
         const uint64_t chunk = atomic_load_explicit(&pool[i], memory_order_relaxed);
         if (chunk != UINT64_MAX) {
@@ -80,6 +81,7 @@ static uint32_t allocate_item(lockfree_hashtable_t* table)
                 if (index + i * 64u < config->table_size) {
                     const uint64_t bit = (UINT64_C(1) << index);
                     if ((chunk & bit) == UINT64_C(0)) {
+                        // try to set bit
                         if (!(atomic_fetch_or_explicit(&pool[i], bit, memory_order_acquire) & bit)) {
                             return index + i * 64u;
                         }
@@ -123,24 +125,29 @@ bool lockfree_hashtable_insert(lockfree_hashtable_t* table, const void* key, con
     atomic_uint64_t* entries = table->entries;
     atomic_uint64_t* pool = table->pool;
 
+    // allocate a new item
     const uint32_t item = allocate_item(table);
     if (item == NULL_ITEM) {
         return false;
     }
 
+    // fill data from parameters
     memcpy(get_item_key(table, item), key, config->key_size);
     memcpy(get_item_val(table, item), val, config->val_size);
 
     const uint32_t hash = calc_hash(key, config->key_size);
 
     for (size_t i = 0, index = hash % config->table_size; i < config->table_size; ++i, index = (index + 1) % config->table_size) {
+        // read table entry
         uint64_t old_entry = atomic_load(&entries[index]);
         do {
             const uint32_t old_item = old_entry;
             const uint32_t old_version = old_entry >> 32u;
 
             uint32_t new_item = item;
+            // increment a version
             uint32_t new_version = old_version + 1;
+            // calc new entry
             uint64_t new_entry = ((uint64_t)new_version << 32u) | (uint64_t)new_item;
 
             const bool can_insert = (old_version == 0) // version == 0 means free entry
@@ -151,15 +158,19 @@ bool lockfree_hashtable_insert(lockfree_hashtable_t* table, const void* key, con
             ;
 
             if (can_insert) {
+                // try to make a CAS
                 if (atomic_compare_exchange_weak(&entries[index], &old_entry, new_entry)) {
                     if (old_version > 0) {
                         delete_item(table, old_item);
                     }
                     return true;
                 }
+                // if CAS was failed then try again
             } else {
+                // check that entry wasn't changed
                 new_entry = atomic_load(&entries[index]);
                 if (new_entry == old_entry) {
+                    // if entry is same, we've found a collision, so go to the next entry
                     break;
                 }
                 old_entry = new_entry;
@@ -177,6 +188,7 @@ bool lockfree_hashtable_find(lockfree_hashtable_t* table, const void* key, void*
 
     const uint32_t hash = calc_hash(key, config->key_size);
     for (size_t i = 0, index = hash % config->table_size; i < config->table_size; ++i, index = (index + 1) % config->table_size) {
+        // read table entry
         uint64_t entry = atomic_load(&entries[index]);
         do {
             const uint32_t item = entry;
@@ -190,18 +202,25 @@ bool lockfree_hashtable_find(lockfree_hashtable_t* table, const void* key, void*
             if (item == NULL_ITEM) {
                 break;
             }
+            // compare keys
             if (memcmp(key, get_item_key(table, item), config->key_size) == 0) {
+                // copy value if "val" is not NULL
                 if (val != NULL) {
                     memcpy(val, get_item_val(table, item), config->val_size);
                 }
+                // check that entry wasn't changed
                 const uint64_t new_entry = atomic_load(&entries[index]);
                 if (new_entry == entry) {
+                    // if entry is same then return success
                     return true;
                 }
+                // we've found that somebody changed our entry, try again
                 entry = new_entry;
             } else {
+                // if keys are not equal, maybe somebody changed our entry, check it
                 const uint64_t new_entry = atomic_load(&entries[index]);
                 if (new_entry == entry) {
+                    // if entry is same, so go to the next entry
                     break;
                 }
                 entry = new_entry;
@@ -220,12 +239,15 @@ bool lockfree_hashtable_erase(lockfree_hashtable_t* table, const void* key)
     const uint32_t hash = calc_hash(key, config->key_size);
 
     for (size_t i = 0, index = hash % config->table_size; i < config->table_size; ++i, index = (index + 1) % config->table_size) {
+        // read table entry
         uint64_t old_entry = atomic_load(&entries[index]);
         do {
             const uint32_t old_item = old_entry;
             const uint32_t old_version = old_entry >> 32u;
 
+            // mark item as deleted
             uint32_t new_item = NULL_ITEM;
+            // increment a version
             uint32_t new_version = old_version + 1;
             uint64_t new_entry = ((uint64_t)new_version << 32u) | (uint64_t)new_item;
 
@@ -238,16 +260,22 @@ bool lockfree_hashtable_erase(lockfree_hashtable_t* table, const void* key)
                 break;
             }
 
+            // compare keys
             if (memcmp(key, get_item_key(table, old_item), config->key_size) == 0) {
+                // try to make a CAS
                 if (atomic_compare_exchange_weak(&entries[index], &old_entry, new_entry)) {
                     delete_item(table, old_item);
                     return true;
                 }
+                // if CAS was failed then try again
             } else {
+                // check that entry wasn't changed
                 new_entry = atomic_load(&entries[index]);
                 if (new_entry == old_entry) {
+                    // if entry is same, so go to the next entry
                     break;
                 }
+                // we've found that somebody changed our entry, try again
                 old_entry = new_entry;
             }
         } while(true);

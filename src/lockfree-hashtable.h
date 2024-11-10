@@ -31,6 +31,7 @@ void lockfree_hashtable_init(lockfree_hashtable_t* table, const lockfree_hashtab
 bool lockfree_hashtable_insert(lockfree_hashtable_t* table, const void* key, const void* val);
 
 // find an entry by key, return true if entry is preset in table, false otherwise
+// if "val" is NULL, no value will be copied, just return true if entry is preset
 bool lockfree_hashtable_find(lockfree_hashtable_t* table, const void* key, void* val);
 
 // remove an entry by key from hash table, return true if entry was deleted, false if entry not found
