@@ -98,7 +98,7 @@ static void delete_item(lockfree_hashtable_t* table, uint32_t item)
     }
     atomic_uint64_t* pool = table->pool;
     const uint64_t bit = (UINT64_C(1) << (item % 64));
-    atomic_fetch_or_explicit(&pool[item / 64], bit, memory_order_release);
+    atomic_fetch_and_explicit(&pool[item / 64], ~bit, memory_order_release);
 }
 
 static void* get_item_key(lockfree_hashtable_t* table, uint32_t item)

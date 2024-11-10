@@ -14,5 +14,3 @@ FetchContent_MakeAvailable(Catch2)
 
 add_subdirectory(src)
 add_subdirectory(test)
-
-include(CPack)

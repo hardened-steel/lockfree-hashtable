@@ -1,62 +1,11 @@
-#include "catch2/catch_test_macros.hpp"
-#include <random>
 #include <memory>
-#include <map>
 #include <vector>
 #include <future>
-#include <string_view>
 #include <span>
 
 #include <catch2/catch_all.hpp>
 #include <lockfree-hashtable.h>
-
-template<class Generator>
-std::string random_string(std::string_view prefix, std::string::size_type length, Generator& generator)
-{
-    static const char chars[] =
-        "abcdefghijklmnopqrstuvwxyz"
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-        " _=+-*/"
-    ;
-    std::uniform_int_distribution<std::string::size_type> pick(0, sizeof(chars) - 2);
-
-    std::string s;
-
-    s.reserve(length);
-    s.append(prefix);
-    length -= prefix.size();
-
-    while(length--)
-        s += chars[pick(generator)];
-
-    return s;
-}
-
-template<class Generator>
-std::string random_string(std::string::size_type length, Generator& generator)
-{
-    return random_string("", length, generator);
-}
-
-template<class Generator>
-auto generate_random_data(std::size_t size, std::size_t key_size, std::size_t val_size, Generator& generator)
-{
-    std::map<std::string, std::string> random_data;
-    while(random_data.size() < size) {
-        random_data.emplace(random_string(key_size, generator), random_string(val_size, generator));
-    }
-    return random_data;
-}
-
-auto make_flat_data(std::map<std::string, std::string> data)
-{
-    std::vector<std::pair<std::string, std::string>> flat;
-    flat.reserve(data.size());
-    for(auto& [key, val]: data) {
-        flat.emplace_back(key, std::move(val));
-    }
-    return flat;
-}
+#include "misc.hpp"
 
 TEST_CASE("create and test hashtable", "[insert][find]") {
     const std::size_t key_size = GENERATE(5, 8, 9, 32, 64);
@@ -163,9 +112,7 @@ TEST_CASE("fill and check hash table", "[insert][find]") {
             const auto key = random_string("key_1", key_size, generator);
             const auto val = random_string("val1", val_size, generator);
 
-            REQUIRE(random_data.find(key) == random_data.end());
             REQUIRE(!lockfree_hashtable_find(&table, key.data(), nullptr));
-
             REQUIRE(!lockfree_hashtable_insert(&table, key.data(), val.data()));
         }
 
@@ -179,8 +126,8 @@ TEST_CASE("fill and check hash table", "[insert][find]") {
 TEST_CASE("concurency fill table", "[insert][find]") {
     const std::size_t key_size = 64;
     const std::size_t val_size = 128;
-    const std::size_t table_size = 10;
-    const std::size_t thread_count = GENERATE(1/*2, 3, 7*/);
+    const std::size_t table_size = 1'000'000;
+    const std::size_t thread_count = GENERATE(2, 3, 7);
     const lockfree_hashtable_config_t config = {
         table_size,
         key_size,
@@ -188,7 +135,7 @@ TEST_CASE("concurency fill table", "[insert][find]") {
     };
 
     std::mt19937 generator{std::random_device{}()};
-    const auto random_data = make_flat_data(generate_random_data(8, key_size, val_size, generator));
+    const auto random_data = generate_random_data(table_size * 0.75, key_size, val_size, generator);
     std::string find;
     find.resize(val_size, ' ');
 
@@ -271,9 +218,12 @@ TEST_CASE("concurency fill table", "[insert][find]") {
                 }
             }
 
-            /*SECTION("insert half back and erase another half") {
-                REQUIRE(do_parallel(insert, first_part));
-                REQUIRE(do_parallel(erase, second_part));
+            SECTION("insert half back and erase another half") {
+                auto i_result = std::async(std::launch::async, [&] { return do_parallel(insert, first_part); });
+                auto e_result = std::async(std::launch::async, [&] { return do_parallel(erase, second_part); });
+
+                REQUIRE(i_result.get());
+                REQUIRE(e_result.get());
                 for (auto& [key, val]: second_part) {
                     REQUIRE(!lockfree_hashtable_find(&table, key.data(), nullptr));
                 }
@@ -281,7 +231,7 @@ TEST_CASE("concurency fill table", "[insert][find]") {
                     REQUIRE(lockfree_hashtable_find(&table, key.data(), find.data()));
                     REQUIRE(find == val);
                 }
-            }*/
+            }
         }
     }
 }
